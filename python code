@@ -1,0 +1,438 @@
+import pandas as pd
+# Load the dataset
+file_path = 'drug_data_final.csv'  # Ensure this file is in the working directory
+data = pd.read_csv(file_path)
+
+# Display the original dataset
+data.head()
+
+
+
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.stem import PorterStemmer, WordNetLemmatizer
+
+
+"""# Download necessary NLTK resources
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('wordnet')"""
+
+# Initializing stop words, stemmer, and lemmatizer
+nltk_stopwords = set(stopwords.words('english'))
+frequent_words = {"used", "treatment", "indicated", "the", "for", "of", "is", "a", "in", "and", "with", "an", "as", "to"}
+all_stopwords = nltk_stopwords.union(frequent_words)
+stemmer = PorterStemmer()
+lemmatizer = WordNetLemmatizer()
+
+def preprocess_text(text):
+    if pd.isnull(text):
+        return ""  # Handle missing values by returning an empty string
+    # Lowercasing
+    text = text.lower()
+    # Tokenization
+    tokens = word_tokenize(text)
+    # Remove punctuations and stopwords
+    tokens = [word for word in tokens if word.isalpha() and word not in all_stopwords]
+    # Stemming and Lemmatization
+    tokens = [stemmer.stem(lemmatizer.lemmatize(word)) for word in tokens]
+    return tokens
+
+# Apply preprocessing
+data['Drug1_Description'] = data['Drug1_Description'].apply(preprocess_text)
+data['Drug2_Description'] = data['Drug2_Description'].apply(preprocess_text)
+
+# Combine the descriptions for feature extraction
+data['Combined_Description'] = data['Drug1_Description'] + data['Drug2_Description']
+
+
+# Display processed dataset
+print("\nProcessed Data after Preprocessing:")
+print(data[['Drug1_name', 'Drug2_name', 'Interaction', 'Combined_Description']].head())
+
+# Define DrugBank-specific stop words
+drugbank_stopwords = {"administered", "recommended", "effective", "indications"}
+
+# Remove DrugBank stop words
+def remove_drugbank_stopwords(tokens):
+    return [word for word in tokens if word not in drugbank_stopwords]
+
+# Apply the DrugBank corpus method
+data['Combined_Description'] = data['Combined_Description'].apply(remove_drugbank_stopwords)
+
+# Display the data after applying the DrugBank method
+print("\nData after applying DrugBank corpus method:")
+print(data[['Drug1_name', 'Drug2_name', 'Combined_Description']].head())
+
+import numpy as np
+
+# Load GloVe embeddings (e.g., glove.6B.100d.txt)
+glove_embeddings = {}
+with open('glove.6B.100d.txt', 'r', encoding='utf-8') as f:
+    for line in f:
+        values = line.split()
+        word = values[0]
+        vector = np.asarray(values[1:], dtype='float32')
+        glove_embeddings[word] = vector
+
+# Function to convert a sentence to a vector by averaging GloVe word vectors
+def sentence_to_vector(sentence, embeddings, vector_size=100):
+    vectors = [embeddings[word] for word in sentence if word in embeddings]
+    if len(vectors) == 0:
+        return np.zeros(vector_size)  # Return a zero vector if no words match
+    return np.mean(vectors, axis=0)
+
+# Convert all combined descriptions to vectors
+data['Description_Vector'] = data['Combined_Description'].apply(lambda x: sentence_to_vector(x, glove_embeddings))
+
+# Display final processed data
+print("\nFinal Processed Data:")
+print(data[['Drug1_name', 'Drug2_name', 'Severity', 'Combined_Description']].head())
+
+print("\nSample Vectors (first 5 rows):")
+print(data['Description_Vector'].head())
+
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, classification_report
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Assuming `data` contains your preprocessed drug data with `Description_Vector` and `interaction` as the target
+# Extracting features and target variable
+X = np.vstack(data['Description_Vector'])  # Features
+y = data['Interaction']  # Target variable
+
+# Splitting data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+print(f"Training data shape: {X_train.shape}")
+print(f"Testing data shape: {X_test.shape}")
+
+
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv1D, MaxPooling1D, Flatten, Dense
+
+# Reshape X_train and X_test for CNN
+X_train_cnn = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
+X_test_cnn = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+
+# Building the CNN model
+cnn_model = Sequential()
+cnn_model.add(Conv1D(32, kernel_size=3, activation='relu', input_shape=(X_train.shape[1], 1)))
+cnn_model.add(MaxPooling1D(pool_size=2))
+cnn_model.add(Flatten())
+cnn_model.add(Dense(64, activation='relu'))
+cnn_model.add(Dense(1, activation='sigmoid'))
+cnn_model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+# Training the CNN
+cnn_history = cnn_model.fit(X_train_cnn, y_train, epochs=10, batch_size=64, validation_split=0.2)
+
+# Evaluating the CNN
+cnn_y_pred = (cnn_model.predict(X_test_cnn) > 0.5).astype(int)
+print("\nCNN Classification Report:")
+print(classification_report(y_test, cnn_y_pred))
+
+# Confusion Matrix
+cnn_cm = confusion_matrix(y_test, cnn_y_pred)
+plt.figure(figsize=(6, 4))
+sns.heatmap(cnn_cm, annot=True, fmt="d", cmap="Blues")
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.title("CNN Confusion Matrix")
+plt.show()
+
+from tensorflow.keras.layers import SimpleRNN
+
+# Reshape X_train and X_test for RNN
+X_train_rnn = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
+X_test_rnn = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+
+# Building the RNN model
+rnn_model = Sequential()
+rnn_model.add(SimpleRNN(32, input_shape=(X_train.shape[1], 1), activation='relu'))
+rnn_model.add(Dense(1, activation='sigmoid'))
+rnn_model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+# Training the RNN
+rnn_history = rnn_model.fit(X_train_rnn, y_train, epochs=10, batch_size=32)
+
+# Evaluating the RNN
+rnn_y_pred = (rnn_model.predict(X_test_rnn) > 0.5).astype(int)
+print("\nRNN Classification Report:")
+print(classification_report(y_test, rnn_y_pred))
+
+# Confusion Matrix
+rnn_cm = confusion_matrix(y_test, rnn_y_pred)
+plt.figure(figsize=(6, 4))
+sns.heatmap(rnn_cm, annot=True, fmt="d", cmap="Blues")
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.title("RNN Confusion Matrix")
+plt.show()
+
+
+from tensorflow.keras.layers import LSTM
+
+# Reshape X_train and X_test for LSTM
+X_train_lstm = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
+X_test_lstm = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+
+# Building the LSTM model
+lstm_model = Sequential()
+lstm_model.add(Conv1D(32, kernel_size=3, activation='relu', input_shape=(X_train.shape[1], 1)))
+lstm_model.add(MaxPooling1D(pool_size=2))
+lstm_model.add(LSTM(64))
+lstm_model.add(Dense(64, activation='relu'))
+lstm_model.add(Dense(1, activation='sigmoid'))
+lstm_model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+# Training the LSTM
+lstm_history = lstm_model.fit(X_train_lstm, y_train, epochs=10, batch_size=64, validation_split=0.2)
+
+# Evaluating the LSTM
+lstm_y_pred = (lstm_model.predict(X_test_lstm) > 0.5).astype(int)
+print("\nLSTM Classification Report:")
+print(classification_report(y_test, lstm_y_pred))
+
+# Confusion Matrix
+lstm_cm = confusion_matrix(y_test, lstm_y_pred)
+plt.figure(figsize=(6, 4))
+sns.heatmap(lstm_cm, annot=True, fmt="d", cmap="Blues")
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.title("LSTM Confusion Matrix")
+plt.show()
+
+
+# Building the FCNN model
+fcnn_model = Sequential()
+fcnn_model.add(Dense(128, activation='relu', input_shape=(X_train.shape[1],)))
+fcnn_model.add(Dense(64, activation='relu'))
+fcnn_model.add(Dense(1, activation='sigmoid'))
+fcnn_model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+# Training the FCNN
+fcnn_history = fcnn_model.fit(X_train, y_train, epochs=10, batch_size=64, validation_split=0.2)
+
+# Evaluating the FCNN
+fcnn_y_pred = (fcnn_model.predict(X_test) > 0.5).astype(int)
+print("\nFCNN Classification Report:")
+print(classification_report(y_test, fcnn_y_pred))
+
+# Confusion Matrix
+fcnn_cm = confusion_matrix(y_test, fcnn_y_pred)
+plt.figure(figsize=(6, 4))
+sns.heatmap(fcnn_cm, annot=True, fmt="d", cmap="Blues")
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.title("FCNN Confusion Matrix")
+plt.show()
+
+
+from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
+
+# Compute ROC curves and AUC for each model
+models = {
+    "CNN": (cnn_model, X_test_cnn),
+    "RNN": (rnn_model, X_test_rnn),
+    "LSTM": (lstm_model, X_test_lstm),
+    "FCNN": (fcnn_model, X_test),
+}
+
+plt.figure(figsize=(8, 6))
+
+for model_name, (model, X_test_data) in models.items():
+    y_pred_proba = model.predict(X_test_data)
+    fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
+    roc_auc = auc(fpr, tpr)
+    plt.plot(fpr, tpr, label=f"{model_name} (AUC = {roc_auc:.2f})")
+
+# Plot the diagonal line for reference
+plt.plot([0, 1], [0, 1], color="gray", linestyle="--")
+
+# Add labels and title
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("ROC Curve Comparison")
+plt.legend(loc="lower right")
+
+
+
+# Extract training accuracy from model histories
+cnn_accuracy = cnn_history.history['accuracy']
+rnn_accuracy = rnn_history.history['accuracy']
+lstm_accuracy = lstm_history.history['accuracy']
+fcnn_accuracy = fcnn_history.history['accuracy']
+
+# Print the extracted accuracies
+print("CNN Accuracy:", cnn_accuracy)
+print("RNN Accuracy:", rnn_accuracy)
+print("LSTM Accuracy:", lstm_accuracy)
+print("FCNN Accuracy:", fcnn_accuracy)
+
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, classification_report
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+
+# Assuming `data` contains your preprocessed drug data with `Description_Vector` and `interaction` as the target
+# Extract features and target
+X = np.vstack(data['Description_Vector'])  # Features
+y = data['Interaction']  # Target variable
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+
+# Initialize the models
+models = [
+    ("Logistic Regression", LogisticRegression(max_iter=1000)),
+    ("Decision Tree", DecisionTreeClassifier()),
+    ("Random Forest", RandomForestClassifier()),
+    ("Support Vector Machine", SVC(probability=True))
+]
+
+# Iterate through the models and calculate classification report and confusion matrix
+for model_name, model in models:
+    # Train the model
+    model.fit(X_train, y_train)
+
+    # Make predictions
+    y_pred = model.predict(X_test)
+
+    # Calculate the confusion matrix
+    cm = confusion_matrix(y_test, y_pred)
+
+    # Generate the classification report
+    class_report = classification_report(y_test, y_pred)
+
+    # Print the model name
+    print(f"Model: {model_name}")
+
+    # Print the classification report
+    print("Classification Report:\n", class_report)
+
+    # Plot the confusion matrix
+    plt.figure(figsize=(6, 4))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
+    plt.xlabel("Predicted")
+    plt.ylabel("Actual")
+    plt.title(f"Confusion Matrix for {model_name}")
+    plt.show()
+
+    # Add some space between outputs for readability
+    print("\n\n")
+# Define the accuracy values for each neural network 
+cnn_accuracy = [0.596875011920929, 0.6265624761581421, 0.714062511920929, 0.7124999761581421, 0.7250000238418579, 0.739062488079071, 0.7437499761581421, 0.7406250238418579, 0.754687488079071, 0.7640625238418579]
+rnn_accuracy = [0.5662500262260437, 0.5712500214576721, 0.5712500214576721, 0.5712500214576721, 0.5899999737739563, 0.6387500166893005, 0.643750011920929, 0.6775000095367432, 0.6700000166893005, 0.6775000095367432]
+lstm_accuracy = [0.581250011920929, 0.581250011920929, 0.581250011920929, 0.581250011920929, 0.581250011920929, 0.581250011920929, 0.581250011920929, 0.6109374761581421, 0.6015625, 0.653124988079071]
+fcnn_accuracy = [0.59375, 0.698437511920929, 0.7203124761581421, 0.7484375238418579, 0.739062488079071, 0.7593749761581421, 0.784375011920929, 0.7796875238418579, 0.7953125238418579, 0.8062499761581421]
+
+# Define the number of epochs
+epochs = list(range(1, 11))
+
+# Plot the accuracy for each model for 10 epochs
+plt.plot(epochs, cnn_accuracy, label='CNN')
+plt.plot(epochs, rnn_accuracy, label='RNN')
+plt.plot(epochs, lstm_accuracy, label='LSTM')
+plt.plot(epochs, fcnn_accuracy, label='FCNN')
+
+# Plot labels and title
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.title('Accuracy vs. Epoch')
+plt.grid(True)
+
+# Show the legend
+plt.legend()
+
+# Show the plot
+plt.show()
+
+
+import matplotlib.pyplot as plt
+
+# Final Accuracy Scores of Each Model
+cnn_final_accuracy = cnn_accuracy[-1]
+rnn_final_accuracy = rnn_accuracy[-1]
+lstm_final_accuracy = lstm_accuracy[-1]
+fcnn_final_accuracy = fcnn_accuracy[-1]
+
+# Accuracy from other models (assumed you've saved it in variables like below)
+log_reg_accuracy = 0.78  # Example value
+decision_tree_accuracy = 0.72  # Example value
+random_forest_accuracy = 0.81  # Example value
+svm_accuracy = 0.76  # Example value
+
+# Creating a bar plot to compare model accuracies
+models = ["CNN", "RNN", "LSTM", "FCNN", "Logistic Regression", "Decision Tree", "Random Forest", "SVM"]
+accuracies = [cnn_final_accuracy, rnn_final_accuracy, lstm_final_accuracy, fcnn_final_accuracy, 
+              log_reg_accuracy, decision_tree_accuracy, random_forest_accuracy, svm_accuracy]
+
+# Exclude columns containing unhashable types like lists
+hashable_columns = data.select_dtypes(exclude=['object']).columns
+column_counts = data[hashable_columns].nunique()
+
+# Plot unique value counts
+plt.figure(figsize=(12, 8))
+column_counts.plot(kind='bar', color='#6a5acd')  # Slate blue color
+plt.xlabel('Columns')
+plt.ylabel('Unique Value Count')
+plt.title('Unique Value Counts for Each Column in the Dataset')
+plt.xticks(rotation=45)
+plt.grid(axis='y', linestyle='--', color='#d3d3d3')  # Light grey grid lines
+plt.show()
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Load the dataset
+file_path = 'drug_data_final.csv'  # Ensure this file exists in your working directory
+data = pd.read_csv(file_path)
+
+# Display the count of unique values for each column in the dataset
+column_counts = data.nunique()
+
+# Visualize the unique value counts for all columns in the dataset using a bar plot
+plt.figure(figsize=(12, 8))
+column_counts.plot(kind='bar', color='#6a5acd')  # Slate Blue color
+plt.xlabel('Columns', fontsize=14, color='#34495e')  # Dark Grayish Blue
+plt.ylabel('Unique Value Count', fontsize=14, color='#34495e')
+plt.title('Unique Value Counts for Each Column in the Dataset', fontsize=16, color='#2c3e50')  # Dark Blue
+plt.xticks(rotation=45, color='#2c3e50', fontsize=12)  # Matching Dark Blue
+plt.yticks(color='#2c3e50', fontsize=12)
+plt.grid(axis='y', linestyle='--', color='#d3d3d3')  # Light Gray Grid Lines
+plt.show()
+
+# Define model performance metrics for bar plot
+performance_metrics = {
+    "Model": ["CNN", "RNN", "LSTM", "FCNN", "Logistic Regression", "Decision Tree", "Random Forest", "SVM"],
+    "Accuracy": [0.7640625238418579, 0.6775000095367432, 0.653124988079071, 0.8062499761581421, 0.78, 0.72, 0.81, 0.76],
+    "Precision": [0.69, 0.64, 0.58, 0.71, 0.72, 0.71, 0.75, 0.73],
+    "Recall": [0.66, 0.61, 0.52, 0.70, 0.70, 0.68, 0.75, 0.71],
+    "F1-Score": [0.68, 0.62, 0.42, 0.71, 0.71, 0.69, 0.76, 0.72]
+}
+
+# Convert to DataFrame for easier plotting
+performance_df = pd.DataFrame(performance_metrics)
+
+# Plotting bar plot for performance metrics
+performance_df.set_index("Model")[["Accuracy", "Precision", "Recall", "F1-Score"]].plot(kind="bar", figsize=(12, 8), color=["skyblue", "lightgreen", "orange", "salmon"])
+plt.title("Model Performance Comparison")
+plt.ylabel("Score")
+plt.xlabel("Model")
+plt.legend(loc="lower right")
+plt.xticks(rotation=45)
+plt.grid(axis="y", linestyle="--")
+plt.show()
+
